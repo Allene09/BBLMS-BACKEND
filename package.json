@@ -1,9 +1,10 @@
 {
   "name": "bisu-bilar-library-management-backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "repository": {
     "type": "git",
@@ -16,5 +17,17 @@
     "url": "https://github.com/Allene09/BISU-BILAR-LIBRARY-MANAGEMENT-BACKEND/issues"
   },
   "homepage": "https://github.com/Allene09/BISU-BILAR-LIBRARY-MANAGEMENT-BACKEND#readme",
-  "description": ""
+  "description": "",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.6.2",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.1.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
 }
