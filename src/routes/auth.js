@@ -6,15 +6,16 @@ const { getDb } = require('../database/init');
 const router = express.Router();
 
 // Login
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const { user_id, password } = req.body;
     if (!user_id || !password) {
       return res.status(400).json({ error: 'User ID and password are required.' });
     }
 
-    const db = getDb();
-    const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(user_id);
+    const pool = getDb();
+    const [results] = await pool.query('CALL sp_user_login(?)', [user_id]);
+    const user = results[0][0];
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials.' });
@@ -39,7 +40,7 @@ router.post('/login', (req, res) => {
         username: user.username,
         designation: user.designation,
         access_right: user.access_right,
-        is_admin: user.is_admin,
+        is_admin: user.is_admin ? 1 : 0,
       },
     });
   } catch (err) {
@@ -48,15 +49,16 @@ router.post('/login', (req, res) => {
 });
 
 // Get current user
-router.get('/me', (req, res) => {
+router.get('/me', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) return res.status(401).json({ error: 'No token' });
 
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const db = getDb();
-    const user = db.prepare('SELECT id, user_id, username, designation, access_right, is_admin FROM users WHERE id = ?').get(decoded.id);
+    const pool = getDb();
+    const [results] = await pool.query('CALL sp_get_current_user(?)', [decoded.id]);
+    const user = results[0][0];
 
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);

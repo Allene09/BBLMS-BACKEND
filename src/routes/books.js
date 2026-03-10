@@ -6,40 +6,25 @@ const router = express.Router();
 router.use(authMiddleware);
 
 // Get all books with optional search
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const db = getDb();
-    const { search, type, circulation_type } = req.query;
-    let query = 'SELECT * FROM books WHERE 1=1';
-    const params = [];
-
-    if (search) {
-      query += ' AND (title LIKE ? OR author LIKE ? OR barcode LIKE ? OR isbn LIKE ? OR call_no LIKE ?)';
-      const s = `%${search}%`;
-      params.push(s, s, s, s, s);
-    }
-    if (type) {
-      query += ' AND type = ?';
-      params.push(type);
-    }
-    if (circulation_type) {
-      query += ' AND circulation_type = ?';
-      params.push(circulation_type);
-    }
-
-    query += ' ORDER BY title ASC';
-    const books = db.prepare(query).all(...params);
-    res.json(books);
+    const { search = null, type = null, circulation_type = null } = req.query;
+    const pool = getDb();
+    const [results] = await pool.query('CALL sp_get_all_books(?, ?, ?)', [
+      search || null, type || null, circulation_type || null,
+    ]);
+    res.json(results[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get single book
-router.get('/:id', (req, res) => {
+// Get book by barcode — must be BEFORE /:id
+router.get('/barcode/:barcode', async (req, res) => {
   try {
-    const db = getDb();
-    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id);
+    const pool = getDb();
+    const [results] = await pool.query('CALL sp_get_book_by_barcode(?)', [req.params.barcode]);
+    const book = results[0][0];
     if (!book) return res.status(404).json({ error: 'Book not found' });
     res.json(book);
   } catch (err) {
@@ -47,11 +32,12 @@ router.get('/:id', (req, res) => {
   }
 });
 
-// Get book by barcode
-router.get('/barcode/:barcode', (req, res) => {
+// Get single book
+router.get('/:id', async (req, res) => {
   try {
-    const db = getDb();
-    const book = db.prepare('SELECT * FROM books WHERE barcode = ?').get(req.params.barcode);
+    const pool = getDb();
+    const [results] = await pool.query('CALL sp_get_book_by_id(?)', [req.params.id]);
+    const book = results[0][0];
     if (!book) return res.status(404).json({ error: 'Book not found' });
     res.json(book);
   } catch (err) {
@@ -60,9 +46,9 @@ router.get('/barcode/:barcode', (req, res) => {
 });
 
 // Create book
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
-    const db = getDb();
+    const pool = getDb();
     const {
       title, author, co_author, type, publisher, place, date_published,
       volume, series, category, format, editor, illustrator, pages, isbn,
@@ -73,27 +59,18 @@ router.post('/', (req, res) => {
 
     if (!title) return res.status(400).json({ error: 'Title is required' });
 
-    const result = db.prepare(`
-      INSERT INTO books (title, author, co_author, type, publisher, place, date_published,
-        volume, series, category, format, editor, illustrator, pages, isbn,
-        physical_desc, accession_no, call_no, barcode, location,
-        circulation_type, price, value, purchased_date, evaluated_date,
-        acquisition_date, copies_available)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      title, author || '', co_author || '', type || 'Book', publisher || '', place || '',
-      date_published || '', volume || '', series || '', category || '', format || '',
-      editor || '', illustrator || '', pages || '', isbn || '', physical_desc || '',
-      accession_no || '', call_no || '', barcode || null, location || '',
-      circulation_type || 'Loanable', price || 0, value || 0,
-      purchased_date || '', evaluated_date || '', acquisition_date || '',
-      copies_available || 1
-    );
-
-    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(result.lastInsertRowid);
-    res.status(201).json(book);
+    const [results] = await pool.query('CALL sp_create_book(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+      title, author || null, co_author || null, type || null, publisher || null,
+      place || null, date_published || null, volume || null, series || null,
+      category || null, format || null, editor || null, illustrator || null,
+      pages || null, isbn || null, physical_desc || null, accession_no || null,
+      call_no || null, barcode || null, location || null, circulation_type || null,
+      price || null, value || null, purchased_date || null, evaluated_date || null,
+      acquisition_date || null, copies_available || null,
+    ]);
+    res.status(201).json(results[0][0]);
   } catch (err) {
-    if (err.message.includes('UNIQUE constraint')) {
+    if (err.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ error: 'A book with this barcode already exists' });
     }
     res.status(500).json({ error: err.message });
@@ -101,36 +78,30 @@ router.post('/', (req, res) => {
 });
 
 // Update book
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
-    const db = getDb();
-    const existing = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Book not found' });
+    const pool = getDb();
+    const {
+      title, author, co_author, type, publisher, place, date_published,
+      volume, series, category, format, editor, illustrator, pages, isbn,
+      physical_desc, accession_no, call_no, barcode, location,
+      circulation_type, price, value, purchased_date, evaluated_date,
+      acquisition_date, copies_available
+    } = req.body;
 
-    const fields = [
-      'title', 'author', 'co_author', 'type', 'publisher', 'place', 'date_published',
-      'volume', 'series', 'category', 'format', 'editor', 'illustrator', 'pages', 'isbn',
-      'physical_desc', 'accession_no', 'call_no', 'barcode', 'location',
-      'circulation_type', 'price', 'value', 'purchased_date', 'evaluated_date',
-      'acquisition_date', 'copies_available'
-    ];
-
-    const updates = [];
-    const values = [];
-    for (const field of fields) {
-      if (req.body[field] !== undefined) {
-        updates.push(`${field} = ?`);
-        values.push(req.body[field]);
-      }
-    }
-
-    if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
-
-    updates.push("updated_at = datetime('now')");
-    values.push(req.params.id);
-
-    db.prepare(`UPDATE books SET ${updates.join(', ')} WHERE id = ?`).run(...values);
-    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id);
+    const [results] = await pool.query('CALL sp_update_book(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+      req.params.id,
+      title || null, author || null, co_author || null, type || null,
+      publisher || null, place || null, date_published || null, volume || null,
+      series || null, category || null, format || null, editor || null,
+      illustrator || null, pages || null, isbn || null, physical_desc || null,
+      accession_no || null, call_no || null, barcode || null, location || null,
+      circulation_type || null, price || null, value || null,
+      purchased_date || null, evaluated_date || null, acquisition_date || null,
+      copies_available || null,
+    ]);
+    const book = results[0][0];
+    if (!book) return res.status(404).json({ error: 'Book not found' });
     res.json(book);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -138,15 +109,13 @@ router.put('/:id', (req, res) => {
 });
 
 // Delete book
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    const db = getDb();
-    const existing = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Book not found' });
-
-    db.prepare('DELETE FROM books WHERE id = ?').run(req.params.id);
+    const pool = getDb();
+    await pool.query('CALL sp_delete_book(?)', [req.params.id]);
     res.json({ message: 'Book deleted successfully' });
   } catch (err) {
+    if (err.sqlState === '45000') return res.status(404).json({ error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
