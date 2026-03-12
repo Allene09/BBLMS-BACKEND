@@ -24,9 +24,19 @@ router.get('/my-loans', async (req, res) => {
   try {
     const pool = getDb();
     const userId = req.user.user_id;
+    const username = req.user.username;
     
-    // Find borrower with matching id_no
-    const [borrowerResult] = await pool.query('SELECT id FROM borrowers WHERE id_no = ?', [userId]);
+    // Try to find borrower by id_no first, then by name
+    let [borrowerResult] = await pool.query('SELECT id FROM borrowers WHERE id_no = ?', [userId]);
+    
+    // If not found by id_no, try to find by firstname matching username
+    if (!borrowerResult[0]) {
+      [borrowerResult] = await pool.query(
+        'SELECT id FROM borrowers WHERE firstname = ? OR CONCAT(firstname, " ", lastname) = ?',
+        [username, username]
+      );
+    }
+    
     if (!borrowerResult[0]) return res.json([]); // No borrower record yet
     
     const [results] = await pool.query('CALL sp_get_borrower_loans(?)', [borrowerResult[0].id]);
