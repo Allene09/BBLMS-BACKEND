@@ -10,9 +10,6 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Initialize database
-initializeDatabase();
-
 // Routes
 app.use('/api/auth', require('./src/routes/auth'));
 app.use('/api/books', require('./src/routes/books'));
@@ -28,7 +25,10 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'BISU-Bilar Library Management System API' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`API: http://localhost:${PORT}/api`);
+// Initialize MySQL pool then start server
+initializeDatabase().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`API: http://localhost:${PORT}/api`);
+  });
 });

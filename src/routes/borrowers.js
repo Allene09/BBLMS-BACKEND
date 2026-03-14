@@ -6,33 +6,25 @@ const router = express.Router();
 router.use(authMiddleware);
 
 // Get all borrowers
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const db = getDb();
-    const { search, type, status } = req.query;
-    let query = 'SELECT * FROM borrowers WHERE 1=1';
-    const params = [];
-
-    if (search) {
-      query += ' AND (firstname LIKE ? OR lastname LIKE ? OR id_no LIKE ? OR email LIKE ?)';
-      const s = `%${search}%`;
-      params.push(s, s, s, s);
-    }
-    if (type) { query += ' AND type = ?'; params.push(type); }
-    if (status) { query += ' AND status = ?'; params.push(status); }
-
-    query += ' ORDER BY lastname ASC, firstname ASC';
-    res.json(db.prepare(query).all(...params));
+    const { search = null, type = null, status = null } = req.query;
+    const pool = getDb();
+    const [results] = await pool.query('CALL sp_get_all_borrowers(?, ?, ?)', [
+      search || null, type || null, status || null,
+    ]);
+    res.json(results[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get single borrower
-router.get('/:id', (req, res) => {
+// Get borrower by ID number — must be BEFORE /:id
+router.get('/idno/:id_no', async (req, res) => {
   try {
-    const db = getDb();
-    const borrower = db.prepare('SELECT * FROM borrowers WHERE id = ?').get(req.params.id);
+    const pool = getDb();
+    const [results] = await pool.query('CALL sp_get_borrower_by_idno(?)', [req.params.id_no]);
+    const borrower = results[0][0];
     if (!borrower) return res.status(404).json({ error: 'Borrower not found' });
     res.json(borrower);
   } catch (err) {
@@ -40,11 +32,12 @@ router.get('/:id', (req, res) => {
   }
 });
 
-// Get borrower by ID number
-router.get('/idno/:id_no', (req, res) => {
+// Get single borrower
+router.get('/:id', async (req, res) => {
   try {
-    const db = getDb();
-    const borrower = db.prepare('SELECT * FROM borrowers WHERE id_no = ?').get(req.params.id_no);
+    const pool = getDb();
+    const [results] = await pool.query('CALL sp_get_borrower_by_id(?)', [req.params.id]);
+    const borrower = results[0][0];
     if (!borrower) return res.status(404).json({ error: 'Borrower not found' });
     res.json(borrower);
   } catch (err) {
@@ -53,22 +46,21 @@ router.get('/idno/:id_no', (req, res) => {
 });
 
 // Create borrower
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
-    const db = getDb();
+    const pool = getDb();
     const { id_no, firstname, lastname, mobile_phone, phone, email, address, notes, type, status } = req.body;
     if (!id_no || !firstname || !lastname) {
       return res.status(400).json({ error: 'ID No, Firstname, and Lastname are required' });
     }
-
-    const result = db.prepare(`
-      INSERT INTO borrowers (id_no, firstname, lastname, mobile_phone, phone, email, address, notes, type, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id_no, firstname, lastname, mobile_phone || '', phone || '', email || '', address || '', notes || '', type || 'Student', status || 'Active');
-
-    res.status(201).json(db.prepare('SELECT * FROM borrowers WHERE id = ?').get(result.lastInsertRowid));
+    const [results] = await pool.query('CALL sp_create_borrower(?,?,?,?,?,?,?,?,?,?)', [
+      id_no, firstname, lastname,
+      mobile_phone || null, phone || null, email || null,
+      address || null, notes || null, type || null, status || null,
+    ]);
+    res.status(201).json(results[0][0]);
   } catch (err) {
-    if (err.message.includes('UNIQUE constraint')) {
+    if (err.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ error: 'A borrower with this ID number already exists' });
     }
     res.status(500).json({ error: err.message });
@@ -76,42 +68,32 @@ router.post('/', (req, res) => {
 });
 
 // Update borrower
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
-    const db = getDb();
-    const existing = db.prepare('SELECT * FROM borrowers WHERE id = ?').get(req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Borrower not found' });
-
-    const fields = ['id_no', 'firstname', 'lastname', 'mobile_phone', 'phone', 'email', 'address', 'notes', 'type', 'status'];
-    const updates = [];
-    const values = [];
-    for (const field of fields) {
-      if (req.body[field] !== undefined) {
-        updates.push(`${field} = ?`);
-        values.push(req.body[field]);
-      }
-    }
-    if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
-
-    updates.push("updated_at = datetime('now')");
-    values.push(req.params.id);
-    db.prepare(`UPDATE borrowers SET ${updates.join(', ')} WHERE id = ?`).run(...values);
-    res.json(db.prepare('SELECT * FROM borrowers WHERE id = ?').get(req.params.id));
+    const pool = getDb();
+    const { id_no, firstname, lastname, mobile_phone, phone, email, address, notes, type, status } = req.body;
+    const [results] = await pool.query('CALL sp_update_borrower(?,?,?,?,?,?,?,?,?,?,?)', [
+      req.params.id,
+      id_no || null, firstname || null, lastname || null,
+      mobile_phone || null, phone || null, email || null,
+      address || null, notes || null, type || null, status || null,
+    ]);
+    const borrower = results[0][0];
+    if (!borrower) return res.status(404).json({ error: 'Borrower not found' });
+    res.json(borrower);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Delete borrower
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    const db = getDb();
-    const existing = db.prepare('SELECT * FROM borrowers WHERE id = ?').get(req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Borrower not found' });
-
-    db.prepare('DELETE FROM borrowers WHERE id = ?').run(req.params.id);
+    const pool = getDb();
+    await pool.query('CALL sp_delete_borrower(?)', [req.params.id]);
     res.json({ message: 'Borrower deleted successfully' });
   } catch (err) {
+    if (err.sqlState === '45000') return res.status(404).json({ error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
