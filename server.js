@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { initializeDatabase } = require('./src/database/init');
+const { getDb, initializeDatabase } = require('./src/database/init');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -9,6 +9,22 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Public stats endpoint (no auth required — used by landing page & login)
+app.get('/api/stats', async (req, res) => {
+  try {
+    const pool = getDb();
+    const [rows] = await pool.query(
+      `SELECT
+        (SELECT COUNT(*) FROM books)                             AS totalBooks,
+        (SELECT COUNT(*) FROM borrowers)                         AS totalBorrowers,
+        (SELECT COUNT(*) FROM transactions WHERE status='Loaned') AS activeLoans`
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Routes
 app.use('/api/auth', require('./src/routes/auth'));
