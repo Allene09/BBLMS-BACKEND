@@ -23,4 +23,18 @@ function adminMiddleware(req, res, next) {
   next();
 }
 
-module.exports = { authMiddleware, adminMiddleware };
+function requireRoles(roles = []) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthorized.' });
+    }
+
+    if (!roles.includes(req.user.access_right)) {
+      return res.status(403).json({ error: 'Access denied for this role.' });
+    }
+
+    next();
+  };
+}
+
+module.exports = { authMiddleware, adminMiddleware, requireRoles };

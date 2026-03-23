@@ -3,6 +3,65 @@ const { getDb } = require('../database/init');
 const { authMiddleware } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Public search endpoint for landing page visitors
+router.get('/public-search', async (req, res) => {
+  try {
+    const query = (req.query.q || '').trim();
+    const category = (req.query.category || '').trim();
+    const pool = getDb();
+
+    if (query.length < 2) {
+      return res.json([]);
+    }
+
+    const like = `%${query}%`;
+    const [rows] = await pool.query(
+      `SELECT
+         id,
+         title,
+         author,
+         category,
+         type,
+         circulation_type,
+         accession_no,
+         call_no,
+         location,
+         copies_available
+       FROM books
+       WHERE (
+         title LIKE ?
+         OR author LIKE ?
+         OR category LIKE ?
+         OR isbn LIKE ?
+       )
+       AND (? = '' OR category = ?)
+       ORDER BY copies_available DESC, title ASC
+       LIMIT 12`,
+      [like, like, like, like, category, category]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/public-categories', async (_req, res) => {
+  try {
+    const pool = getDb();
+    const [rows] = await pool.query(
+      `SELECT DISTINCT category
+       FROM books
+       WHERE category IS NOT NULL AND TRIM(category) <> ''
+       ORDER BY category ASC`
+    );
+    res.json(rows.map((row) => row.category));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.use(authMiddleware);
 
 // Get all books with optional search

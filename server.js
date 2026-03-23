@@ -35,6 +35,7 @@ app.use('/api/transactions', require('./src/routes/transactions'));
 app.use('/api/reservations', require('./src/routes/reservations'));
 app.use('/api/users', require('./src/routes/users'));
 app.use('/api/dashboard', require('./src/routes/dashboard'));
+app.use('/api/reports', require('./src/routes/reports'));
 
 // Health check
 app.get('/api/health', (req, res) => {

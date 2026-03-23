@@ -1,9 +1,104 @@
 const express = require('express');
 const { getDb } = require('../database/init');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requireRoles } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(authMiddleware);
+router.use(requireRoles(['ADMIN', 'LIBRARIAN', 'CIRCULATION_IN_CHARGE']));
+
+function parseIsoDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+
+function dayDiff(a, b) {
+  const ms = 24 * 60 * 60 * 1000;
+  return Math.floor((a.getTime() - b.getTime()) / ms);
+}
+
+// Active loans search for circulation return flow (search borrower or title)
+router.get('/active-loans', async (req, res) => {
+  try {
+    const { search = '' } = req.query;
+    const pool = getDb();
+    const like = `%${String(search || '').trim()}%`;
+
+    const [rows] = await pool.query(
+      `SELECT
+         t.id,
+         t.loan_date,
+         t.due_date,
+         t.status,
+         b.id AS book_id,
+         b.title AS book_title,
+         b.author AS book_author,
+         b.barcode AS book_barcode,
+         br.id AS borrower_id,
+         br.id_no AS borrower_id_no,
+         CONCAT(br.firstname, ' ', br.lastname) AS borrower_name,
+         GREATEST(DATEDIFF(CURDATE(), t.due_date), 0) AS days_overdue
+       FROM transactions t
+       INNER JOIN books b ON t.book_id = b.id
+       INNER JOIN borrowers br ON t.borrower_id = br.id
+       WHERE t.status IN ('Loaned', 'Overdue')
+         AND (? = '%%' OR
+              b.title LIKE ? OR
+              b.author LIKE ? OR
+              b.barcode LIKE ? OR
+              br.firstname LIKE ? OR
+              br.lastname LIKE ? OR
+              br.id_no LIKE ?)
+       ORDER BY t.due_date ASC, b.title ASC`,
+      [like, like, like, like, like, like, like]
+    );
+
+    const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
+    const formatted = rows.map((row) => ({
+      ...row,
+      current_status: row.days_overdue > 0 ? 'Overdue' : 'Loaned',
+      suggested_fine: Number((row.days_overdue * dailyFineRate).toFixed(2)),
+    }));
+
+    res.json(formatted);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Overdue monitoring list
+router.get('/overdue', async (req, res) => {
+  try {
+    const pool = getDb();
+    const [rows] = await pool.query(
+      `SELECT
+         t.id,
+         t.loan_date,
+         t.due_date,
+         b.title AS book_title,
+         CONCAT(br.firstname, ' ', br.lastname) AS borrower_name,
+         br.id_no AS borrower_id_no,
+         GREATEST(DATEDIFF(CURDATE(), t.due_date), 1) AS days_overdue
+       FROM transactions t
+       INNER JOIN books b ON t.book_id = b.id
+       INNER JOIN borrowers br ON t.borrower_id = br.id
+       WHERE t.status IN ('Loaned', 'Overdue')
+         AND t.due_date < CURDATE()
+       ORDER BY t.due_date ASC`
+    );
+
+    const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
+    res.json(
+      rows.map((row) => ({
+        ...row,
+        estimated_fine: Number((row.days_overdue * dailyFineRate).toFixed(2)),
+      }))
+    );
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Get all transactions with optional filters
 router.get('/', async (req, res) => {
@@ -53,14 +148,52 @@ router.post('/checkin/:id', async (req, res) => {
   try {
     const pool = getDb();
     const { return_date, fine_amount, past_due_fines, notes } = req.body;
+
+    let computedFineAmount = fine_amount;
+    let computedPastDueFines = past_due_fines;
+    const returnDateValue = return_date || new Date().toISOString().split('T')[0];
+
+    if (computedFineAmount === undefined || computedPastDueFines === undefined) {
+      const [txRows] = await pool.query(
+        `SELECT id, due_date, status
+         FROM transactions
+         WHERE id = ?`,
+        [req.params.id]
+      );
+
+      const tx = txRows[0];
+      if (!tx) {
+        return res.status(404).json({ error: 'Transaction not found' });
+      }
+
+      const dueDate = parseIsoDate(tx.due_date);
+      const returnDate = parseIsoDate(returnDateValue);
+      const overdueDays = dueDate && returnDate ? Math.max(dayDiff(returnDate, dueDate), 0) : 0;
+      const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
+
+      if (computedFineAmount === undefined) {
+        computedFineAmount = Number((overdueDays * dailyFineRate).toFixed(2));
+      }
+
+      if (computedPastDueFines === undefined) {
+        computedPastDueFines = 0;
+      }
+    }
+
     const [results] = await pool.query('CALL sp_checkin_book(?,?,?,?,?)', [
       req.params.id,
-      return_date || null,
-      fine_amount !== undefined ? fine_amount : null,
-      past_due_fines !== undefined ? past_due_fines : null,
+      returnDateValue || null,
+      computedFineAmount,
+      computedPastDueFines,
       notes || null,
     ]);
-    res.json(results[0][0]);
+    const payload = results[0][0];
+    res.json({
+      ...payload,
+      computedFineAmount: Number(computedFineAmount || 0),
+      computedPastDueFines: Number(computedPastDueFines || 0),
+      totalFine: Number((Number(computedFineAmount || 0) + Number(computedPastDueFines || 0)).toFixed(2)),
+    });
   } catch (err) {
     if (err.sqlState === '45000') return res.status(400).json({ error: err.message });
     res.status(500).json({ error: err.message });

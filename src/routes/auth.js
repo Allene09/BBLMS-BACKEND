@@ -50,6 +50,8 @@ router.post('/login', async (req, res) => {
 
 // Sign Up - Register new user and borrower
 router.post('/signup', async (req, res) => {
+  return res.status(403).json({ error: 'Self-signup is disabled. Please contact the administrator.' });
+
   try {
     const pool = getDb();
     const {
