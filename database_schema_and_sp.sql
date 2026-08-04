@@ -26,6 +26,7 @@ CREATE TABLE `users` (
   `designation`  VARCHAR(100)   DEFAULT '',
   `access_right` VARCHAR(50)    DEFAULT 'USER',
   `is_admin`     TINYINT(1)     DEFAULT 0,
+    `status`       ENUM('APPROVED','PENDING','DENIED') DEFAULT 'APPROVED',
   `created_at`   DATETIME       DEFAULT CURRENT_TIMESTAMP,
   `updated_at`   DATETIME       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -174,8 +175,8 @@ CREATE TABLE `reservations` (
 -- ============================================================================
 
 -- Default admin user (password: admin123 — hash with bcrypt at app level)
-INSERT INTO `users` (`user_id`, `username`, `password`, `designation`, `access_right`, `is_admin`)
-VALUES ('ADMIN', 'ADMIN USER', '$2a$10$placeholder_hash_replace_at_app_level', 'Librarian', 'ADMINISTRATOR', 1)
+INSERT INTO `users` (`user_id`, `username`, `password`, `designation`, `access_right`, `is_admin`, `status`)
+VALUES ('ADMIN', 'ADMIN USER', '$2a$10$placeholder_hash_replace_at_app_level', 'Librarian', 'ADMINISTRATOR', 1, 'APPROVED')
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
 
@@ -216,7 +217,8 @@ BEGIN
         `password`,
         `designation`,
         `access_right`,
-        `is_admin`
+        `is_admin`,
+        `status`
     FROM `users`
     WHERE `user_id` = p_user_id;
 
@@ -253,7 +255,8 @@ BEGIN
         `username`,
         `designation`,
         `access_right`,
-        `is_admin`
+        `is_admin`,
+        `status`
     FROM `users`
     WHERE `id` = p_id;
 
@@ -292,6 +295,7 @@ BEGIN
         `designation`,
         `access_right`,
         `is_admin`,
+        `status`,
         `created_at`
     FROM `users`
     ORDER BY `user_id`;
@@ -317,7 +321,8 @@ CREATE DEFINER=`bisublar_cis`@`%` PROCEDURE `sp_create_user`(
     IN p_password     VARCHAR(255),
     IN p_designation  VARCHAR(100),
     IN p_access_right VARCHAR(50),
-    IN p_is_admin     TINYINT(1)
+    IN p_is_admin     TINYINT(1),
+    IN p_status       VARCHAR(20)
 )
 BEGIN
     DECLARE v_new_id INT;
@@ -329,8 +334,8 @@ BEGIN
     END;
     START TRANSACTION;
 
-    INSERT INTO `users` (`user_id`, `username`, `password`, `designation`, `access_right`, `is_admin`)
-    VALUES (p_user_id, p_username, p_password, IFNULL(p_designation, ''), IFNULL(p_access_right, 'USER'), IFNULL(p_is_admin, 0));
+    INSERT INTO `users` (`user_id`, `username`, `password`, `designation`, `access_right`, `is_admin`, `status`)
+    VALUES (p_user_id, p_username, p_password, IFNULL(p_designation, ''), IFNULL(p_access_right, 'USER'), IFNULL(p_is_admin, 0), IFNULL(p_status, 'APPROVED'));
 
     SET v_new_id = LAST_INSERT_ID();
 
@@ -340,7 +345,8 @@ BEGIN
         `username`,
         `designation`,
         `access_right`,
-        `is_admin`
+        `is_admin`,
+        `status`
     FROM `users`
     WHERE `id` = v_new_id;
 
@@ -365,7 +371,8 @@ CREATE DEFINER=`bisublar_cis`@`%` PROCEDURE `sp_update_user`(
     IN p_password     VARCHAR(255),
     IN p_designation  VARCHAR(100),
     IN p_access_right VARCHAR(50),
-    IN p_is_admin     TINYINT(1)
+    IN p_is_admin     TINYINT(1),
+    IN p_status       VARCHAR(20)
 )
 BEGIN
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -382,6 +389,7 @@ BEGIN
         `designation`  = IFNULL(p_designation, `designation`),
         `access_right` = IFNULL(p_access_right, `access_right`),
         `is_admin`     = IFNULL(p_is_admin, `is_admin`),
+        `status`       = IFNULL(p_status, `status`),
         `updated_at`   = NOW()
     WHERE `id` = p_id;
 
@@ -391,7 +399,8 @@ BEGIN
         `username`,
         `designation`,
         `access_right`,
-        `is_admin`
+        `is_admin`,
+        `status`
     FROM `users`
     WHERE `id` = p_id;
 
