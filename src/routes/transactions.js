@@ -4,6 +4,59 @@ const { authMiddleware, requireRoles } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(authMiddleware);
+
+// ── Student / Borrower: view own borrow history ──────────────────────────────
+// This route is registered BEFORE the circulation-staff role guard so that
+// students and borrowers can access it with just a valid JWT.
+router.get('/my-borrows', async (req, res) => {
+  try {
+    const pool = getDb();
+    const userIdNo = req.user.user_id; // users.user_id == borrowers.id_no
+
+    const [rows] = await pool.query(
+      `SELECT
+         t.id,
+         t.loan_date,
+         t.due_date,
+         t.return_date,
+         t.fine_amount,
+         t.past_due_fines,
+         t.total_fine,
+         t.notes,
+         t.status,
+         b.title      AS book_title,
+         b.author     AS book_author,
+         b.barcode    AS book_barcode,
+         b.type       AS book_type,
+         b.call_no    AS book_call_no,
+         b.category   AS book_category,
+         GREATEST(DATEDIFF(CURDATE(), t.due_date), 0) AS days_overdue
+       FROM transactions t
+       INNER JOIN books     b  ON t.book_id     = b.id
+       INNER JOIN borrowers br ON t.borrower_id = br.id
+       WHERE br.id_no = ?
+       ORDER BY
+         FIELD(t.status, 'Overdue', 'Loaned', 'Returned'),
+         t.due_date ASC`,
+      [userIdNo]
+    );
+
+    const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
+    const formatted = rows.map((row) => ({
+      ...row,
+      accruing_fine:
+        row.status !== 'Returned'
+          ? Number((row.days_overdue * dailyFineRate).toFixed(2))
+          : 0,
+    }));
+
+    res.json(formatted);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Circulation-staff routes (Librarian / Circulation In-Charge only) ─────────
 router.use(requireRoles(['ADMIN', 'LIBRARIAN', 'CIRCULATION_IN_CHARGE']));
 
 function parseIsoDate(value) {
