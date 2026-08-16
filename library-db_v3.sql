@@ -1535,3 +1535,112 @@ DELIMITER ;
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
 /*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CASHIER / FINE PAYMENT MODULE  (added 2026-08-16)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Add fine_paid flag to transactions (safe ALTER - skipped if column exists) */
+
+ALTER TABLE `transactions`
+  ADD COLUMN IF NOT EXISTS `fine_paid` TINYINT(1) NOT NULL DEFAULT 0 AFTER `total_fine`;
+
+/*Table structure for table `fine_payments` */
+
+DROP TABLE IF EXISTS `fine_payments`;
+
+CREATE TABLE `fine_payments` (
+  `id`                  int(11)           NOT NULL AUTO_INCREMENT,
+  `transaction_id`      int(11)           NOT NULL,
+  `fine_amount`         decimal(10,2)     NOT NULL DEFAULT '0.00',
+  `amount_paid`         decimal(10,2)     NOT NULL DEFAULT '0.00',
+  `change_given`        decimal(10,2)     NOT NULL DEFAULT '0.00',
+  `payment_type`        enum('Cash')      NOT NULL DEFAULT 'Cash',
+  `payment_status`      enum('Paid','Void') NOT NULL DEFAULT 'Paid',
+  `received_by_user_id` varchar(50)  COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `receipt_no`          varchar(30)  COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `notes`               text         COLLATE utf8mb4_unicode_ci,
+  `paid_at`             datetime          DEFAULT CURRENT_TIMESTAMP,
+  `created_at`          datetime          DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_fine_payments_receipt` (`receipt_no`),
+  KEY `idx_fine_payments_transaction` (`transaction_id`),
+  KEY `idx_fine_payments_status` (`payment_status`),
+  CONSTRAINT `fk_fine_payments_transaction`
+    FOREIGN KEY (`transaction_id`) REFERENCES `transactions` (`id`) ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+/* Procedure structure for procedure `sp_process_fine_payment` */
+
+/*!50003 DROP PROCEDURE IF EXISTS `sp_process_fine_payment` */;
+
+DELIMITER $$
+
+/*!50003 CREATE DEFINER=`bisublar_lss`@`%` PROCEDURE `sp_process_fine_payment`(
+    IN p_transaction_id      INT,
+    IN p_amount_paid         DECIMAL(10,2),
+    IN p_payment_type        VARCHAR(10),
+    IN p_received_by_user_id VARCHAR(50),
+    IN p_notes               TEXT
+)
+BEGIN
+    DECLARE v_fine_amount   DECIMAL(10,2);
+    DECLARE v_fine_paid     TINYINT(1);
+    DECLARE v_tx_status     VARCHAR(20);
+    DECLARE v_new_id        INT;
+    DECLARE v_change_given  DECIMAL(10,2);
+    DECLARE v_receipt_no    VARCHAR(30);
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+    START TRANSACTION;
+    -- Validate transaction
+    SELECT `total_fine`, `fine_paid`, `status`
+      INTO v_fine_amount, v_fine_paid, v_tx_status
+      FROM `transactions`
+      WHERE `id` = p_transaction_id;
+    IF v_fine_amount IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Transaction not found';
+    END IF;
+    IF v_fine_paid = 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Fine has already been paid for this transaction';
+    END IF;
+    IF v_fine_amount = 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'This transaction has no outstanding fine';
+    END IF;
+    IF p_amount_paid < v_fine_amount THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Amount paid is less than the fine amount';
+    END IF;
+    SET v_change_given = p_amount_paid - v_fine_amount;
+    -- Insert payment record (receipt_no updated after INSERT to use LAST_INSERT_ID)
+    INSERT INTO `fine_payments`
+        (`transaction_id`, `fine_amount`, `amount_paid`, `change_given`,
+         `payment_type`, `payment_status`, `received_by_user_id`, `receipt_no`, `notes`, `paid_at`)
+    VALUES
+        (p_transaction_id, v_fine_amount, p_amount_paid, v_change_given,
+         IFNULL(p_payment_type, 'Cash'), 'Paid', p_received_by_user_id, '', IFNULL(p_notes, ''), NOW());
+    SET v_new_id = LAST_INSERT_ID();
+    -- Generate receipt number: RCPT-YYYYMMDD-NNNN
+    SET v_receipt_no = CONCAT('RCPT-', DATE_FORMAT(NOW(), '%Y%m%d'), '-', LPAD(v_new_id, 4, '0'));
+    UPDATE `fine_payments` SET `receipt_no` = v_receipt_no WHERE `id` = v_new_id;
+    -- Mark fine as paid on transaction
+    UPDATE `transactions` SET `fine_paid` = 1 WHERE `id` = p_transaction_id;
+    -- Return payment record with borrower and book info
+    SELECT
+        fp.*,
+        t.`loan_date`, t.`due_date`, t.`return_date`,
+        b.`title`  AS book_title,
+        b.`barcode` AS book_barcode,
+        CONCAT(br.`firstname`, ' ', br.`lastname`) AS borrower_name,
+        br.`id_no` AS borrower_id_no
+    FROM `fine_payments` fp
+    INNER JOIN `transactions` t  ON fp.`transaction_id` = t.`id`
+    INNER JOIN `books`        b  ON t.`book_id`         = b.`id`
+    INNER JOIN `borrowers`    br ON t.`borrower_id`     = br.`id`
+    WHERE fp.`id` = v_new_id;
+    COMMIT;
+END */$$
+DELIMITER ;
+
