@@ -60,6 +60,25 @@ async function initializeDatabase() {
       console.log('Migrated transactions.fine_paid column');
     }
 
+    // ── Migration: new personal info fields on borrowers ────────────────────────
+    const [borrowerCol] = await pool.query(
+      `SELECT COUNT(*) AS column_count
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ?
+         AND TABLE_NAME   = 'borrowers'
+         AND COLUMN_NAME  = 'middle_name'`,
+      [process.env.DB_NAME]
+    );
+    if ((borrowerCol[0]?.column_count || 0) === 0) {
+      await pool.query(
+        `ALTER TABLE borrowers
+         ADD COLUMN middle_name VARCHAR(100) DEFAULT '' AFTER firstname,
+         ADD COLUMN gender ENUM('Male','Female','Other') DEFAULT 'Male' AFTER lastname,
+         ADD COLUMN college ENUM('CTECH','CFES','CBM','COAS') DEFAULT 'CTECH' AFTER gender`
+      );
+      console.log('Migrated borrowers table (middle_name, gender, college)');
+    }
+
     // ── Migration: fine_payments table ─────────────────────────────────────────
     const [fpTable] = await pool.query(
       `SELECT COUNT(*) AS table_count

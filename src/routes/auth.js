@@ -106,7 +106,7 @@ router.post('/signup', async (req, res) => {
   try {
     const pool = getDb();
     const {
-      id_no, firstname, lastname, password,
+      id_no, firstname, middle_name, lastname, gender, college, password,
       mobile_phone, phone, email, address, notes, type
     } = req.body;
 
@@ -180,7 +180,10 @@ router.post('/signup', async (req, res) => {
         await conn.query(
           `UPDATE borrowers
            SET firstname = ?,
+               middle_name = ?,
                lastname = ?,
+               gender = ?,
+               college = ?,
                mobile_phone = ?,
                phone = ?,
                email = ?,
@@ -193,7 +196,10 @@ router.post('/signup', async (req, res) => {
            WHERE id_no = ?`,
           [
             firstname,
+            middle_name || '',
             lastname,
+            gender || 'Male',
+            college || 'CTECH',
             mobile_phone || '',
             phone || '',
             email || '',
@@ -206,12 +212,15 @@ router.post('/signup', async (req, res) => {
       } else {
         await conn.query(
           `INSERT INTO borrowers
-            (id_no, firstname, lastname, mobile_phone, phone, email, address, notes, date_registered, type, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, 'Inactive')`,
+            (id_no, firstname, middle_name, lastname, gender, college, mobile_phone, phone, email, address, notes, date_registered, type, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, 'Inactive')`,
           [
             id_no,
             firstname,
+            middle_name || '',
             lastname,
+            gender || 'Male',
+            college || 'CTECH',
             mobile_phone || '',
             phone || '',
             email || '',
@@ -266,28 +275,29 @@ router.get('/me', async (req, res) => {
     }
 
     let borrower = null;
-    if (String(user.access_right || '').toUpperCase() === 'BORROWER') {
-      const [borrowerRows] = await pool.query(
-        `SELECT
-           id,
-           id_no,
-           firstname,
-           lastname,
-           mobile_phone,
-           phone,
-           email,
-           address,
-           notes,
-           date_registered,
-           type,
-           status
-         FROM borrowers
-         WHERE id_no = ?
-         LIMIT 1`,
-        [user.user_id]
-      );
-      borrower = borrowerRows[0] || null;
-    }
+    const [borrowerRows] = await pool.query(
+      `SELECT
+         id,
+         id_no,
+         firstname,
+         middle_name,
+         lastname,
+         gender,
+         college,
+         mobile_phone,
+         phone,
+         email,
+         address,
+         notes,
+         date_registered,
+         type,
+         status
+       FROM borrowers
+       WHERE id_no = ?
+       LIMIT 1`,
+      [user.user_id]
+    );
+    borrower = borrowerRows[0] || null;
 
     res.json({ ...user, borrower });
   } catch (err) {
@@ -352,23 +362,29 @@ router.patch('/me', async (req, res) => {
       );
 
       let borrower = null;
-      const isBorrower = String(currentUser.access_right || '').toUpperCase() === 'BORROWER';
-      if (isBorrower) {
-        const borrowerInput = req.body.borrower || {};
-        const nameParts = splitFullName(nextUsername);
-        const firstname = String(borrowerInput.firstname ?? nameParts.firstname).trim();
-        const lastname = String(borrowerInput.lastname ?? nameParts.lastname).trim();
-        const mobilePhone = String(borrowerInput.mobile_phone ?? '').trim();
-        const phone = String(borrowerInput.phone ?? '').trim();
-        const email = String(borrowerInput.email ?? '').trim();
-        const address = String(borrowerInput.address ?? '').trim();
-        const notes = borrowerInput.notes !== undefined ? String(borrowerInput.notes || '').trim() : null;
-        const type = normalizeBorrowerType(borrowerInput.type ?? 'Student');
+      const borrowerInput = req.body.borrower || {};
+      const nameParts = splitFullName(nextUsername);
+      const firstname = String(borrowerInput.firstname ?? nameParts.firstname).trim();
+      const middle_name = String(borrowerInput.middle_name ?? '').trim();
+      const lastname = String(borrowerInput.lastname ?? nameParts.lastname).trim();
+      const gender = String(borrowerInput.gender ?? 'Male').trim();
+      const college = String(borrowerInput.college ?? 'CTECH').trim();
+      const mobilePhone = String(borrowerInput.mobile_phone ?? '').trim();
+      const phone = String(borrowerInput.phone ?? '').trim();
+      const email = String(borrowerInput.email ?? '').trim();
+      const address = String(borrowerInput.address ?? '').trim();
+      const notes = borrowerInput.notes !== undefined ? String(borrowerInput.notes || '').trim() : null;
+      const type = normalizeBorrowerType(borrowerInput.type ?? 'Student');
 
+      const [existingBorrower] = await conn.query('SELECT id FROM borrowers WHERE id_no = ?', [currentUser.user_id]);
+      if (existingBorrower.length > 0) {
         await conn.query(
           `UPDATE borrowers
            SET firstname = ?,
+               middle_name = ?,
                lastname = ?,
+               gender = ?,
+               college = ?,
                mobile_phone = ?,
                phone = ?,
                email = ?,
@@ -379,7 +395,10 @@ router.patch('/me', async (req, res) => {
            WHERE id_no = ?`,
           [
             firstname,
+            middle_name,
             lastname,
+            gender,
+            college,
             mobilePhone,
             phone,
             email,
@@ -389,28 +408,31 @@ router.patch('/me', async (req, res) => {
             currentUser.user_id,
           ]
         );
-
-        const [borrowerRows] = await conn.query(
-          `SELECT
-             id,
-             id_no,
-             firstname,
-             lastname,
-             mobile_phone,
-             phone,
-             email,
-             address,
-             notes,
-             date_registered,
-             type,
-             status
-           FROM borrowers
-           WHERE id_no = ?
-           LIMIT 1`,
-          [currentUser.user_id]
-        );
-        borrower = borrowerRows[0] || null;
       }
+
+      const [borrowerRows] = await conn.query(
+        `SELECT
+           id,
+           id_no,
+           firstname,
+           middle_name,
+           lastname,
+           gender,
+           college,
+           mobile_phone,
+           phone,
+           email,
+           address,
+           notes,
+           date_registered,
+           type,
+           status
+         FROM borrowers
+         WHERE id_no = ?
+         LIMIT 1`,
+        [currentUser.user_id]
+      );
+      borrower = borrowerRows[0] || null;
 
       const [updatedRows] = await conn.query(
         `SELECT id, user_id, username, designation, access_right, is_admin, status
