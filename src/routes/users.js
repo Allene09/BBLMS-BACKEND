@@ -47,6 +47,7 @@ router.get('/pending-signups', adminMiddleware, async (req, res) => {
          b.email,
          b.address,
          b.notes,
+         b.college,
          b.date_registered,
          b.type AS borrower_type,
          b.status AS borrower_status
@@ -199,17 +200,27 @@ router.get('/', async (req, res) => {
     const pool = getDb();
     const [results] = await pool.query(
       `SELECT
-         id,
-         user_id,
-         username,
-         designation,
-         access_right,
-         is_admin,
-         status,
-         created_at,
-         updated_at
-       FROM users
-       ORDER BY created_at DESC`
+         u.id,
+         u.user_id,
+         u.username,
+         u.designation,
+         u.access_right,
+         u.is_admin,
+         u.status,
+         u.created_at,
+         u.updated_at,
+         b.firstname,
+         b.lastname,
+         b.mobile_phone,
+         b.phone,
+         b.email,
+         b.address,
+         b.notes,
+         b.college,
+         b.type AS borrower_type
+       FROM users u
+       LEFT JOIN borrowers b ON b.id_no = u.user_id
+       ORDER BY u.created_at DESC`
     );
     res.json(results);
   } catch (err) {

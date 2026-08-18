@@ -15,7 +15,7 @@ function generateReceiptNo(id) {
 }
 
 // ── GET /api/fines/unpaid ─────────────────────────────────────────────────────
-// Returns returned transactions that have a total_fine > 0 and fine_paid = 0
+// Returns returned transactions with fines, plus currently overdue transactions
 router.get('/unpaid', async (req, res) => {
   try {
     const { search = '' } = req.query;
@@ -40,24 +40,35 @@ router.get('/unpaid', async (req, res) => {
          br.id             AS borrower_id,
          br.id_no          AS borrower_id_no,
          CONCAT(br.firstname, ' ', br.lastname) AS borrower_name,
-         DATEDIFF(t.return_date, t.due_date) AS days_overdue
+         GREATEST(DATEDIFF(COALESCE(t.return_date, CURDATE()), t.due_date), 0) AS days_overdue
        FROM transactions t
        INNER JOIN books     b  ON t.book_id     = b.id
        INNER JOIN borrowers br ON t.borrower_id = br.id
-       WHERE t.total_fine > 0
-         AND t.fine_paid  = 0
-         AND t.status     = 'Returned'
+       WHERE (
+           (t.status = 'Returned' AND t.total_fine > 0 AND t.fine_paid = 0)
+           OR
+           (t.status = 'Overdue')
+         )
          AND (? = '%%' OR
               br.firstname  LIKE ? OR
               br.lastname   LIKE ? OR
               br.id_no      LIKE ? OR
               b.title       LIKE ? OR
               b.barcode     LIKE ?)
-       ORDER BY t.return_date DESC`,
+       ORDER BY t.status DESC, t.due_date ASC`,
       [like, like, like, like, like, like]
     );
 
-    res.json(rows);
+    const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
+    const formattedRows = rows.map((row) => {
+      if (row.loan_status === 'Overdue') {
+        const estimated = Number((row.days_overdue * dailyFineRate).toFixed(2));
+        return { ...row, total_fine: estimated };
+      }
+      return row;
+    });
+
+    res.json(formattedRows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -129,11 +140,9 @@ router.post('/pay', async (req, res) => {
       return res.status(400).json({ error: 'amount_paid must be a positive number' });
     }
 
-    await conn.beginTransaction();
-
     // ── Fetch transaction ─────────────────────────────────────────────────────
     const [[tx]] = await conn.query(
-      `SELECT t.id, t.total_fine, t.fine_paid, t.status,
+      `SELECT t.id, t.total_fine, t.fine_paid, t.status, t.due_date,
               CONCAT(br.firstname, ' ', br.lastname) AS borrower_name,
               br.id_no AS borrower_id_no,
               b.title  AS book_title
@@ -145,26 +154,50 @@ router.post('/pay', async (req, res) => {
     );
 
     if (!tx) {
-      await conn.rollback();
       return res.status(404).json({ error: 'Transaction not found' });
     }
     if (tx.fine_paid === 1) {
-      await conn.rollback();
       return res.status(400).json({ error: 'Fine has already been paid for this transaction' });
     }
-    if (Number(tx.total_fine) === 0) {
-      await conn.rollback();
+
+    let fineAmount = Number(tx.total_fine);
+    let wasOverdue = false;
+
+    // Dynamically calculate fine if still overdue
+    if (tx.status === 'Overdue' && fineAmount === 0) {
+      const dueDate = new Date(tx.due_date);
+      // Use UTC to calculate days accurately to avoid timezone offset issues
+      const now = new Date();
+      const utcNow = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+      const utcDue = Date.UTC(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+      const overdueDays = Math.max(Math.floor((utcNow - utcDue) / (1000 * 60 * 60 * 24)), 0);
+      const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
+      fineAmount = Number((overdueDays * dailyFineRate).toFixed(2));
+      wasOverdue = true;
+    }
+
+    if (fineAmount === 0) {
       return res.status(400).json({ error: 'This transaction has no outstanding fine' });
     }
-    if (amountPaidNum < Number(tx.total_fine)) {
-      await conn.rollback();
+    if (amountPaidNum < fineAmount) {
       return res.status(400).json({
-        error: `Amount paid (${amountPaidNum.toFixed(2)}) is less than the fine amount (${Number(tx.total_fine).toFixed(2)})`,
+        error: `Amount paid (${amountPaidNum.toFixed(2)}) is less than the fine amount (${fineAmount.toFixed(2)})`,
       });
     }
 
-    const fineAmount   = Number(tx.total_fine);
-    const changeGiven  = parseFloat((amountPaidNum - fineAmount).toFixed(2));
+    // If it was overdue, check it in first using the stored procedure
+    // Note: sp_checkin_book commits its own transaction
+    if (wasOverdue) {
+      const returnDate = new Date().toISOString().split('T')[0];
+      await conn.query('CALL sp_checkin_book(?, ?, ?, 0, ?)', [
+        transaction_id, returnDate, fineAmount, 'Auto-returned during fine payment'
+      ]);
+    }
+
+    // Start transaction for payment recording
+    await conn.beginTransaction();
+
+    const changeGiven = parseFloat((amountPaidNum - fineAmount).toFixed(2));
 
     // ── Insert payment record ─────────────────────────────────────────────────
     const [insertResult] = await conn.query(

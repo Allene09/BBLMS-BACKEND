@@ -106,20 +106,16 @@ router.post('/signup', async (req, res) => {
   try {
     const pool = getDb();
     const {
-      id_no, firstname, middle_name, lastname, gender, college, password,
+      id_no, firstname, middle_name, lastname, gender, college,
       mobile_phone, phone, email, address, notes, type
     } = req.body;
 
     // Validation
-    if (!id_no || !firstname || !lastname || !password) {
-      return res.status(400).json({ error: 'ID No, Firstname, Lastname, and Password are required.' });
+    if (!id_no || !firstname || !lastname) {
+      return res.status(400).json({ error: 'ID No, Firstname, and Lastname are required.' });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-    }
-
-    const hashedPassword = bcrypt.hashSync(password, 10);
+    const hashedPassword = bcrypt.hashSync('bisu123', 10);
     const username = `${firstname} ${lastname}`.trim();
     const borrowerType = normalizeBorrowerType(type);
     const conn = await pool.getConnection();
