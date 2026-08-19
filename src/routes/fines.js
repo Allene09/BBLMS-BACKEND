@@ -47,7 +47,7 @@ router.get('/unpaid', async (req, res) => {
        WHERE (
            (t.status = 'Returned' AND t.total_fine > 0 AND t.fine_paid = 0)
            OR
-           (t.status = 'Overdue')
+           (t.status IN ('Loaned', 'Overdue') AND t.due_date < CURDATE())
          )
          AND (? = '%%' OR
               br.firstname  LIKE ? OR
@@ -61,9 +61,9 @@ router.get('/unpaid', async (req, res) => {
 
     const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
     const formattedRows = rows.map((row) => {
-      if (row.loan_status === 'Overdue') {
+      if (row.loan_status === 'Overdue' || (row.loan_status === 'Loaned' && row.days_overdue > 0)) {
         const estimated = Number((row.days_overdue * dailyFineRate).toFixed(2));
-        return { ...row, total_fine: estimated };
+        return { ...row, loan_status: 'Overdue', total_fine: estimated };
       }
       return row;
     });
@@ -164,16 +164,19 @@ router.post('/pay', async (req, res) => {
     let wasOverdue = false;
 
     // Dynamically calculate fine if still overdue
-    if (tx.status === 'Overdue' && fineAmount === 0) {
+    if (['Loaned', 'Overdue'].includes(tx.status) && fineAmount === 0) {
       const dueDate = new Date(tx.due_date);
       // Use UTC to calculate days accurately to avoid timezone offset issues
       const now = new Date();
       const utcNow = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
       const utcDue = Date.UTC(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
       const overdueDays = Math.max(Math.floor((utcNow - utcDue) / (1000 * 60 * 60 * 24)), 0);
-      const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
-      fineAmount = Number((overdueDays * dailyFineRate).toFixed(2));
-      wasOverdue = true;
+      
+      if (overdueDays > 0) {
+        const dailyFineRate = Number(process.env.DAILY_FINE_RATE || 5);
+        fineAmount = Number((overdueDays * dailyFineRate).toFixed(2));
+        wasOverdue = true;
+      }
     }
 
     if (fineAmount === 0) {

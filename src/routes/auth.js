@@ -107,7 +107,7 @@ router.post('/signup', async (req, res) => {
     const pool = getDb();
     const {
       id_no, firstname, middle_name, lastname, gender, college,
-      mobile_phone, phone, email, address, notes, type
+      mobile_phone, email, address, type
     } = req.body;
 
     // Validation
@@ -168,9 +168,7 @@ router.post('/signup', async (req, res) => {
         [id_no]
       );
 
-      const borrowerNotes = notes && notes.trim()
-        ? `${notes.trim()} | Pending admin approval`
-        : 'Pending admin approval';
+      const borrowerNotes = 'Pending admin approval';
 
       if (existingBorrowerRows[0]) {
         await conn.query(
@@ -197,7 +195,7 @@ router.post('/signup', async (req, res) => {
             gender || 'Male',
             college || 'CTECH',
             mobile_phone || '',
-            phone || '',
+            '',
             email || '',
             address || '',
             borrowerNotes,
@@ -218,7 +216,7 @@ router.post('/signup', async (req, res) => {
             gender || 'Male',
             college || 'CTECH',
             mobile_phone || '',
-            phone || '',
+            '',
             email || '',
             address || '',
             borrowerNotes,

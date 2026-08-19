@@ -29,7 +29,11 @@ function requireRoles(roles = []) {
       return res.status(401).json({ error: 'Unauthorized.' });
     }
 
-    if (!roles.includes(req.user.access_right)) {
+    const userRole = String(req.user.access_right || '').trim().toUpperCase();
+    const allowedRoles = roles.map(r => String(r).trim().toUpperCase());
+
+    if (!allowedRoles.includes(userRole)) {
+      console.error(`[requireRoles] Access denied. User role: "${userRole}", Allowed:`, allowedRoles);
       return res.status(403).json({ error: 'Access denied for this role.' });
     }
 
