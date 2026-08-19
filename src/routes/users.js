@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../database/init');
 const { authMiddleware, adminMiddleware } = require('../middleware/auth');
+const { sendApprovalEmail } = require('../utils/mailer');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -95,8 +96,19 @@ router.patch('/:id/approve', adminMiddleware, async (req, res) => {
       [user.user_id]
     );
 
+    const [borrowerRows] = await conn.query(
+      'SELECT firstname, email FROM borrowers WHERE id_no = ? LIMIT 1',
+      [user.user_id]
+    );
+    const borrower = borrowerRows[0];
+
     await conn.commit();
     conn.release();
+
+    if (borrower && borrower.email) {
+      sendApprovalEmail(borrower.email, borrower.firstname, user.user_id, 'bisu123').catch(console.error);
+    }
+
     res.json({ message: 'Signup approved successfully' });
   } catch (err) {
     await conn.rollback();
@@ -232,7 +244,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const pool = getDb();
-    const { user_id, username, password, designation, access_right, is_admin } = req.body;
+    const { user_id, username, password, email, designation, access_right, is_admin } = req.body;
     if (!user_id || !username || !password) {
       return res.status(400).json({ error: 'User ID, username, and password are required' });
     }
@@ -249,6 +261,11 @@ router.post('/', async (req, res) => {
         is_admin ? 1 : 0,
       ]
     );
+
+    if (email) {
+      const { sendAppointEmail } = require('../utils/mailer');
+      sendAppointEmail(email, username, user_id, password).catch(console.error);
+    }
     res.status(201).json({
       id: result.insertId,
       user_id,
