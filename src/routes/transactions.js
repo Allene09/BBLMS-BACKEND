@@ -158,10 +158,33 @@ router.get('/', async (req, res) => {
   try {
     const { status = null, borrower_id = null, search = null } = req.query;
     const pool = getDb();
+    
+    // We pass null for status to the SP, and handle status filtering in Node
+    // so we can dynamically compute 'Overdue' for 'Loaned' books past their due date.
     const [results] = await pool.query('CALL sp_get_all_transactions(?, ?, ?)', [
-      status || null, borrower_id ? parseInt(borrower_id) : null, search || null,
+      null, borrower_id ? parseInt(borrower_id) : null, search || null,
     ]);
-    res.json(results[0]);
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let rows = results[0].map(row => {
+      let finalStatus = row.status;
+      if (finalStatus === 'Loaned' && row.due_date) {
+        const dueDate = new Date(row.due_date);
+        dueDate.setHours(0, 0, 0, 0);
+        if (today > dueDate) {
+           finalStatus = 'Overdue';
+        }
+      }
+      return { ...row, status: finalStatus };
+    });
+
+    if (status) {
+      rows = rows.filter(r => r.status === status);
+    }
+
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
