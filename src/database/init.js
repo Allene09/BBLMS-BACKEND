@@ -79,6 +79,19 @@ async function initializeDatabase() {
       console.log('Migrated borrowers table (middle_name, gender, college)');
     }
 
+    // ── Migration: heal borrower status mismatch ────────────────────────────────
+    // If a user is APPROVED but their linked borrower is still Inactive (e.g. approved
+    // before the approval route set borrowers.status), fix it automatically.
+    const [healResult] = await pool.query(
+      `UPDATE borrowers b
+       JOIN users u ON u.user_id = b.id_no
+       SET b.status = 'Active', b.updated_at = NOW()
+       WHERE u.status = 'APPROVED' AND b.status = 'Inactive'`
+    );
+    if (healResult.affectedRows > 0) {
+      console.log(`Healed ${healResult.affectedRows} borrower(s) with APPROVED user but Inactive borrower status`);
+    }
+
     // ── Migration: fine_payments table ─────────────────────────────────────────
     const [fpTable] = await pool.query(
       `SELECT COUNT(*) AS table_count
