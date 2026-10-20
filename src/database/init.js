@@ -125,6 +125,66 @@ async function initializeDatabase() {
       );
       console.log('Created fine_payments table');
     }
+
+    // ── Migration: incident_locked flag on transactions ─────────────────────────
+    const [incidentLockedCol] = await pool.query(
+      `SELECT COUNT(*) AS column_count
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ?
+         AND TABLE_NAME   = 'transactions'
+         AND COLUMN_NAME  = 'incident_locked'`,
+      [process.env.DB_NAME]
+    );
+    if ((incidentLockedCol[0]?.column_count || 0) === 0) {
+      await pool.query(
+        `ALTER TABLE transactions
+         ADD COLUMN incident_locked TINYINT(1) NOT NULL DEFAULT 0 AFTER fine_paid`
+      );
+      console.log('Migrated transactions.incident_locked column');
+    }
+
+    // ── Migration: book_incident_reports table ──────────────────────────────────
+    const [irTable] = await pool.query(
+      `SELECT COUNT(*) AS table_count
+       FROM information_schema.TABLES
+       WHERE TABLE_SCHEMA = ?
+         AND TABLE_NAME   = 'book_incident_reports'`,
+      [process.env.DB_NAME]
+    );
+    if ((irTable[0]?.table_count || 0) === 0) {
+      await pool.query(
+        `CREATE TABLE book_incident_reports (
+           id                   INT(11)       NOT NULL AUTO_INCREMENT,
+           transaction_id       INT(11)       NOT NULL,
+           reported_by_user_id  VARCHAR(50)   NOT NULL DEFAULT '',
+           incident_type        ENUM('Lost','Torn','Damaged','Other') NOT NULL DEFAULT 'Other',
+           description          TEXT,
+           status               ENUM('Pending','Resolved','Dismissed') NOT NULL DEFAULT 'Pending',
+           action_taken         ENUM('Replacement Required','No Action Needed','Dismissed') DEFAULT NULL,
+           staff_notes          TEXT,
+           resolved_by_user_id  VARCHAR(50)   DEFAULT NULL,
+           created_at           DATETIME      DEFAULT CURRENT_TIMESTAMP,
+           resolved_at          DATETIME      DEFAULT NULL,
+           PRIMARY KEY (id),
+           KEY idx_bir_transaction (transaction_id),
+           KEY idx_bir_status (status),
+           KEY idx_bir_reporter (reported_by_user_id),
+           CONSTRAINT fk_bir_transaction
+             FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON UPDATE CASCADE
+         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+      );
+      console.log('Created book_incident_reports table');
+    } else {
+      // Ensure ENUM includes 'Action Required'
+      try {
+        await pool.query(
+          `ALTER TABLE book_incident_reports
+           MODIFY COLUMN status ENUM('Pending','Action Required','Resolved','Dismissed') NOT NULL DEFAULT 'Pending'`
+        );
+      } catch (e) {
+        // Ignored if already up to date
+      }
+    }
   } catch (err) {
     console.error('MySQL connection failed:', err.message);
     process.exit(1);

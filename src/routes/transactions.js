@@ -24,16 +24,30 @@ router.get('/my-borrows', async (req, res) => {
          t.total_fine,
          t.notes,
          t.status,
+         t.incident_locked,
          b.title      AS book_title,
          b.author     AS book_author,
          b.barcode    AS book_barcode,
          b.type       AS book_type,
          b.call_no    AS book_call_no,
          b.category   AS book_category,
-         GREATEST(DATEDIFF(CURDATE(), t.due_date), 0) AS days_overdue
+         GREATEST(DATEDIFF(CURDATE(), t.due_date), 0) AS days_overdue,
+         ir.id               AS incident_id,
+         ir.incident_type    AS incident_type,
+         ir.description      AS incident_description,
+         ir.status           AS incident_status,
+         ir.action_taken     AS incident_action_taken,
+         ir.staff_notes      AS incident_staff_notes,
+         ir.created_at       AS incident_created_at,
+         ir.resolved_at      AS incident_resolved_at
        FROM transactions t
        INNER JOIN books     b  ON t.book_id     = b.id
        INNER JOIN borrowers br ON t.borrower_id = br.id
+       LEFT JOIN book_incident_reports ir ON ir.id = (
+         SELECT id FROM book_incident_reports 
+         WHERE transaction_id = t.id 
+         ORDER BY id DESC LIMIT 1
+       )
        WHERE br.id_no = ?
        ORDER BY
          FIELD(t.status, 'Overdue', 'Loaned', 'Returned'),
@@ -84,6 +98,8 @@ router.get('/active-loans', async (req, res) => {
          t.loan_date,
          t.due_date,
          t.status,
+         t.incident_locked,
+         (SELECT ir.incident_type FROM book_incident_reports ir WHERE ir.transaction_id = t.id AND ir.status = 'Pending' LIMIT 1) AS pending_incident_type,
          b.id AS book_id,
          b.title AS book_title,
          b.author AS book_author,
@@ -225,6 +241,19 @@ router.post('/checkin/:id', async (req, res) => {
     const pool = getDb();
     const { return_date, fine_amount, past_due_fines, notes } = req.body;
 
+    // ── Block check-in if there is a pending incident report ─────────────────
+    const [pendingReports] = await pool.query(
+      `SELECT id FROM book_incident_reports
+       WHERE transaction_id = ? AND status = 'Pending'
+       LIMIT 1`,
+      [req.params.id]
+    );
+    if (pendingReports.length > 0) {
+      return res.status(409).json({
+        error: 'This book has a pending incident report. Please resolve it before processing the return.',
+      });
+    }
+
     let computedFineAmount = fine_amount;
     let computedPastDueFines = past_due_fines;
     const returnDateValue = return_date || new Date().toISOString().split('T')[0];
@@ -264,6 +293,14 @@ router.post('/checkin/:id', async (req, res) => {
       notes || null,
     ]);
     const payload = results[0][0];
+
+    // Automatically mark incident reports for this transaction as Resolved since return is complete
+    await pool.query(
+      `UPDATE book_incident_reports
+       SET status = 'Resolved', resolved_at = COALESCE(resolved_at, NOW())
+       WHERE transaction_id = ? AND status != 'Dismissed'`,
+      [req.params.id]
+    );
     res.json({
       ...payload,
       computedFineAmount: Number(computedFineAmount || 0),
