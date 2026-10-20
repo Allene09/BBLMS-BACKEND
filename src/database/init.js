@@ -184,6 +184,17 @@ async function initializeDatabase() {
       } catch (e) {
         // Ignored if already up to date
       }
+
+      // Auto-resolve any legacy incident reports that were set to 'Action Required' despite 'No Action Needed'
+      try {
+        await pool.query(
+          `UPDATE book_incident_reports
+           SET status = 'Resolved', resolved_at = COALESCE(resolved_at, NOW())
+           WHERE action_taken = 'No Action Needed' AND status = 'Action Required'`
+        );
+      } catch (e) {
+        // Ignored
+      }
     }
   } catch (err) {
     console.error('MySQL connection failed:', err.message);
