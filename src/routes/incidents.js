@@ -201,7 +201,7 @@ router.patch('/:id/resolve', async (req, res) => {
     } else if (action_taken === 'Replacement Required') {
       newStatus = tx?.status === 'Returned' ? 'Resolved' : 'Action Required';
     } else if (action_taken === 'No Action Needed') {
-      newStatus = tx?.status === 'Returned' ? 'Resolved' : 'Action Required';
+      newStatus = 'Resolved';
     }
 
     // Update the incident report
